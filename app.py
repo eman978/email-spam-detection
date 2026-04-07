@@ -3,10 +3,9 @@ import pickle
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import seaborn as sns
 import os
 import re
+import random
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 
@@ -17,6 +16,61 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ── 20 Spam & 20 Ham Examples ─────────────────────────────────────────────────
+SPAM_EXAMPLES = [
+    "WINNER!! You have been selected to receive a £1000 cash prize! Call 09061701461 to claim NOW. T&Cs apply.",
+    "Congratulations! You've won a FREE iPhone 15! Click here to claim your reward before it expires: www.freeprize.net",
+    "URGENT: Your bank account has been suspended. Verify your details immediately at www.secure-bank-login.com",
+    "You have been specially selected for a FREE holiday to Maldives! Call 0800-FREE-NOW to claim. Limited offer!",
+    "Make $5000 per week working from home! Guaranteed income. No experience needed. Click NOW: www.easymoney.biz",
+    "FREE entry! Text WIN to 88888 and win a brand new car! Only 10 winners. Don't miss out!",
+    "ALERT: Your PayPal account has been compromised. Reset your password NOW: www.paypal-secure-reset.com",
+    "Exclusive deal! Buy 1 get 5 FREE! Limited stock. Order NOW and get 90% discount. Offer expires midnight!",
+    "You've been pre-approved for a £50,000 loan! No credit check. Apply NOW: www.instant-loans-uk.com",
+    "Dear customer, your Amazon account will be CLOSED unless you verify your info here: www.amazon-verify.net",
+    "HOT SINGLES IN YOUR AREA want to meet you! Click here FREE: www.dating-adults.net. Unsubscribe anytime.",
+    "CLAIM YOUR PRIZE! You are our 1,000,000th visitor! Click to collect your $500 gift card immediately!",
+    "Lose 30 pounds in 30 days GUARANTEED! Doctor-approved pill. Buy 2 get 1 FREE. Limited time only!",
+    "Your parcel could not be delivered. Pay £2.99 redelivery fee here: www.royal-mail-delivery-uk.com",
+    "LAST CHANCE: Your subscription expires TODAY. Renew now and get 3 months FREE: www.netflix-offer.net",
+    "Earn UNLIMITED cash with our crypto investment plan! 300% returns guaranteed. Invest $100 get $400 back!",
+    "SIX FIGURE INCOME from home! Our proven system made 2000+ people rich. Start today FREE: www.richfast.com",
+    "IMPORTANT NOTICE: You owe £450 in unpaid taxes. Pay now to avoid legal action: www.hmrc-payment.com",
+    "FREE adult content unlocked for YOU! Visit www.xxx-freezone.com — No credit card needed. Act fast!",
+    "Congratulations! Your mobile number has won the weekly draw! Prize: £3000 cash. Reply CLAIM to 80085.",
+]
+
+HAM_EXAMPLES = [
+    "Hey, are you free for lunch tomorrow? I was thinking we could try that new Italian place near the office.",
+    "Hi Mum, just letting you know I arrived safely. Call me when you're free this evening.",
+    "Can you send me the report before the meeting? I need to review it beforehand. Thanks!",
+    "Don't forget we have football practice at 6pm today. Bring your boots!",
+    "Hey, happy birthday! Hope you have an amazing day. Let's catch up soon 🎂",
+    "The meeting has been rescheduled to 3pm on Friday. Please update your calendar accordingly.",
+    "I left my keys at your place yesterday. Can I come by and pick them up later today?",
+    "Just finished the book you recommended — it was absolutely brilliant! What should I read next?",
+    "Dinner is in the oven. Should be ready by 7. Let me know if you're running late.",
+    "Can you pick up some milk and bread on your way home? Also we're out of eggs.",
+    "Thanks for covering my shift last week. I really appreciate it, I'll return the favour soon.",
+    "Your 2pm appointment with Dr. Ahmed is confirmed for Thursday 10th April. Please arrive 10 mins early.",
+    "Hey, did you watch the match last night? That last-minute goal was absolutely insane!",
+    "I've attached my CV as requested. Please let me know if you need any additional information.",
+    "The project deadline has been extended to next Friday. Let's use the extra time to polish things up.",
+    "Just checked — the train leaves at 8:47am. Platform 3. See you at the station!",
+    "Hey, hope you're feeling better. Let me know if you need anything, happy to drop supplies off.",
+    "Your order #45821 has been dispatched and will arrive within 2-3 working days. Track at royalmail.com",
+    "Quick reminder: team standup is at 9:30am tomorrow. We'll be reviewing sprint goals.",
+    "Great work on the presentation today! The client was really impressed with your data analysis.",
+]
+
+# ── Session State Init ────────────────────────────────────────────────────────
+if "input_text" not in st.session_state:
+    st.session_state.input_text = ""
+if "spam_index" not in st.session_state:
+    st.session_state.spam_index = -1
+if "ham_index" not in st.session_state:
+    st.session_state.ham_index = -1
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -32,13 +86,11 @@ st.markdown("""
         color: #e8e6e1;
     }
 
-    /* Sidebar */
     [data-testid="stSidebar"] {
         background: #131316 !important;
         border-right: 1px solid #2a2a30;
     }
 
-    /* Header */
     .hero-title {
         font-family: 'Syne', sans-serif;
         font-weight: 800;
@@ -59,7 +111,6 @@ st.markdown("""
         text-transform: uppercase;
     }
 
-    /* Cards */
     .result-card {
         border-radius: 16px;
         padding: 28px 32px;
@@ -92,7 +143,6 @@ st.markdown("""
     .spam-value { color: #ff6b6b; }
     .ham-value  { color: #4ecdc4; }
 
-    /* Confidence bar */
     .conf-bar-wrap {
         background: rgba(255,255,255,0.06);
         border-radius: 99px;
@@ -111,29 +161,34 @@ st.markdown("""
         background: linear-gradient(90deg, #4ecdc4, #44bd87);
     }
 
-    /* Metric tiles */
     .metric-tile {
         background: #1a1a1f;
         border: 1px solid #2a2a30;
         border-radius: 12px;
-        padding: 20px 24px;
+        padding: 20px 16px;
         text-align: center;
+        min-width: 0;
+        overflow: hidden;
     }
     .metric-num {
         font-family: 'Space Mono', monospace;
         font-size: 1.9rem;
         font-weight: 700;
         color: #ffd93d;
+        white-space: nowrap;
     }
     .metric-label {
-        font-size: 0.78rem;
+        font-size: 0.75rem;
         color: #888;
         text-transform: uppercase;
-        letter-spacing: 0.1em;
+        letter-spacing: 0.05em;
         margin-top: 4px;
+        white-space: normal;
+        word-break: keep-all;
+        overflow-wrap: normal;
+        line-height: 1.3;
     }
 
-    /* Textarea */
     .stTextArea textarea {
         background: #1a1a1f !important;
         border: 1px solid #2a2a30 !important;
@@ -143,7 +198,6 @@ st.markdown("""
         font-size: 0.9rem !important;
     }
 
-    /* Button */
     .stButton > button {
         background: linear-gradient(135deg, #ff6b6b, #ffd93d) !important;
         color: #0d0d0f !important;
@@ -162,7 +216,6 @@ st.markdown("""
         box-shadow: 0 8px 24px rgba(255,107,107,0.3) !important;
     }
 
-    /* Section headers */
     .section-header {
         font-family: 'Space Mono', monospace;
         font-size: 0.75rem;
@@ -174,7 +227,6 @@ st.markdown("""
         border-bottom: 1px solid #2a2a30;
     }
 
-    /* Tag chip */
     .tag-chip {
         display: inline-block;
         background: rgba(255,107,107,0.15);
@@ -187,11 +239,9 @@ st.markdown("""
         margin: 3px;
     }
 
-    /* Hide streamlit chrome */
     #MainMenu { visibility: hidden; }
     footer     { visibility: hidden; }
     header     { visibility: hidden; }
-
     div[data-testid="stDecoration"] { display: none; }
 </style>
 """, unsafe_allow_html=True)
@@ -225,14 +275,13 @@ def extract_features(text: str) -> dict:
 
 @st.cache_resource
 def load_models():
-    """Load pickled models. Returns None if files not found."""
+    """Load pickled models. Returns None values if files not found."""
     files = {
         'tfidf'  : 'tfidf_vectorizer.pkl',
         'scaler' : 'scaler.pkl',
         'model'  : None,
         'le'     : 'label_encoder.pkl',
     }
-    # Auto-detect best model pkl
     model_candidates = [f for f in os.listdir('.') if f.startswith('best_model_') and f.endswith('.pkl')]
     if model_candidates:
         files['model'] = model_candidates[0]
@@ -263,7 +312,7 @@ def predict(text: str, assets: dict):
     pred  = model.predict(X)[0]
     label = le.inverse_transform([pred])[0]
 
-    prob  = None
+    prob = None
     if hasattr(model, 'predict_proba'):
         prob = model.predict_proba(X)[0]
     elif hasattr(model, 'decision_function'):
@@ -316,22 +365,31 @@ if page == "🔍 Predict":
 
     with col_left:
         st.markdown("<div class='section-header'>Input Message</div>", unsafe_allow_html=True)
-        user_input = st.text_area(
-            label="message",
-            placeholder="Paste your email or SMS here...\n\ne.g. 'Congratulations! You've won a FREE iPhone. Click here NOW!'",
-            height=200,
-            label_visibility="collapsed",
-        )
 
-        # Example buttons
-        st.markdown("<div class='section-header' style='margin-top:18px'>Quick Examples</div>", unsafe_allow_html=True)
+        # ── Example buttons — each click gives a NEW random example ──────────
+        st.markdown("<div class='section-header' style='margin-top:4px'>Quick Examples (click multiple times for new ones!)</div>", unsafe_allow_html=True)
         ex_col1, ex_col2 = st.columns(2)
         with ex_col1:
             if st.button("🚫 Spam Example"):
-                user_input = "WINNER!! You have been selected to receive a £1000 cash prize! Call 09061701461 to claim NOW. T&Cs apply."
+                # Pick a different index than last time
+                available = [i for i in range(len(SPAM_EXAMPLES)) if i != st.session_state.spam_index]
+                st.session_state.spam_index = random.choice(available)
+                st.session_state.input_text = SPAM_EXAMPLES[st.session_state.spam_index]
         with ex_col2:
             if st.button("✅ Ham Example"):
-                user_input = "Hey, are you free for lunch tomorrow? I was thinking we could try that new Italian place."
+                available = [i for i in range(len(HAM_EXAMPLES)) if i != st.session_state.ham_index]
+                st.session_state.ham_index = random.choice(available)
+                st.session_state.input_text = HAM_EXAMPLES[st.session_state.ham_index]
+
+        # ── text_area uses session_state as its value ──
+        user_input = st.text_area(
+            label="message",
+            value=st.session_state.input_text,
+            placeholder="Paste your email or SMS here...\n\ne.g. 'Congratulations! You've won a FREE iPhone. Click here NOW!'",
+            height=200,
+            label_visibility="collapsed",
+            key="input_text",
+        )
 
         st.markdown("<br>", unsafe_allow_html=True)
         run = st.button("🔍 Analyse Message")
@@ -339,20 +397,21 @@ if page == "🔍 Predict":
     with col_right:
         st.markdown("<div class='section-header'>Result</div>", unsafe_allow_html=True)
 
-        if run and user_input.strip():
-            feats = extract_features(user_input)
-            label, prob = predict(user_input, assets)
+        if run and st.session_state.input_text.strip():
+            text_to_analyse = st.session_state.input_text
+            feats = extract_features(text_to_analyse)
+            label, prob = predict(text_to_analyse, assets)
 
             if label:
-                is_spam = label.lower() == 'spam'
-                conf    = (prob[1] if prob is not None else 0.95) if is_spam else (prob[0] if prob is not None else 0.95)
+                is_spam  = label.lower() == 'spam'
+                conf     = (prob[1] if prob is not None else 0.95) if is_spam else (prob[0] if prob is not None else 0.95)
                 conf_pct = f"{conf*100:.1f}%"
 
-                card_cls  = "spam-card" if is_spam else "ham-card"
-                val_cls   = "spam-value" if is_spam else "ham-value"
-                bar_cls   = "conf-bar-fill-spam" if is_spam else "conf-bar-fill-ham"
-                emoji     = "🚫" if is_spam else "✅"
-                verdict   = "SPAM" if is_spam else "HAM"
+                card_cls = "spam-card" if is_spam else "ham-card"
+                val_cls  = "spam-value" if is_spam else "ham-value"
+                bar_cls  = "conf-bar-fill-spam" if is_spam else "conf-bar-fill-ham"
+                emoji    = "🚫" if is_spam else "✅"
+                verdict  = "SPAM" if is_spam else "HAM"
 
                 st.markdown(f"""
                 <div class='result-card {card_cls}'>
@@ -366,7 +425,6 @@ if page == "🔍 Predict":
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Feature breakdown
                 st.markdown("<div class='section-header' style='margin-top:20px'>Message Signals</div>", unsafe_allow_html=True)
                 m1, m2, m3 = st.columns(3)
                 m1.markdown(f"<div class='metric-tile'><div class='metric-num'>{feats['words']}</div><div class='metric-label'>Words</div></div>", unsafe_allow_html=True)
@@ -377,15 +435,16 @@ if page == "🔍 Predict":
                     st.markdown("<div class='section-header' style='margin-top:16px'>Spam Keywords Detected</div>", unsafe_allow_html=True)
                     chips = "".join([f"<span class='tag-chip'>{kw}</span>" for kw in feats['keywords']])
                     st.markdown(chips, unsafe_allow_html=True)
-            else:
-                st.info("Model not loaded. Please check the sidebar.")
 
-        elif run and not user_input.strip():
+            else:
+                st.info("⚠️ Model not loaded. Please check the sidebar and ensure all .pkl files are present.")
+
+        elif run and not st.session_state.input_text.strip():
             st.warning("Please enter a message first.")
         else:
             st.markdown("""
             <div style='color:#555; font-family:Space Mono,monospace; font-size:0.82rem; padding:40px 0; text-align:center'>
-                ← Enter a message<br>and click Analyse
+                ← Enter a message or click an example<br>then click Analyse
             </div>
             """, unsafe_allow_html=True)
 
@@ -396,25 +455,34 @@ elif page == "📊 Dataset Stats":
     st.markdown("<div class='hero-sub'>SMS Spam Collection — Exploratory Overview</div>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Try to load dataset
     csv_candidates = [f for f in os.listdir('.') if f.endswith('.csv')]
     df = None
     if csv_candidates:
         try:
             raw = pd.read_csv(csv_candidates[0], encoding='latin-1')
-            df  = raw[['v1', 'v2']].copy()
-            df.columns = ['label', 'message']
+            # Support both 'v1/v2' columns and 'label/message' columns
+            if 'v1' in raw.columns and 'v2' in raw.columns:
+                df = raw[['v1', 'v2']].copy()
+                df.columns = ['label', 'message']
+            elif 'label' in raw.columns and 'message' in raw.columns:
+                df = raw[['label', 'message']].copy()
+            elif 'Category' in raw.columns and 'Message' in raw.columns:
+                df = raw[['Category', 'Message']].copy()
+                df.columns = ['label', 'message']
+            else:
+                df = raw.iloc[:, :2].copy()
+                df.columns = ['label', 'message']
+
             df = df.drop_duplicates(subset='message').reset_index(drop=True)
             df['msg_length'] = df['message'].apply(len)
-            df['word_count'] = df['message'].apply(lambda x: len(x.split()))
+            df['word_count'] = df['message'].apply(lambda x: len(str(x).split()))
         except Exception as e:
             st.error(f"Could not load CSV: {e}")
 
     if df is not None:
-        # KPI row
-        total  = len(df)
-        n_spam = (df['label'] == 'spam').sum()
-        n_ham  = (df['label'] == 'ham').sum()
+        total        = len(df)
+        n_spam       = (df['label'] == 'spam').sum()
+        n_ham        = (df['label'] == 'ham').sum()
         avg_len_spam = df[df['label'] == 'spam']['msg_length'].mean()
         avg_len_ham  = df[df['label'] == 'ham']['msg_length'].mean()
 
@@ -436,8 +504,7 @@ elif page == "📊 Dataset Stats":
             ax.set_facecolor('#1a1a1f')
             counts = df['label'].value_counts()
             bars   = ax.bar(counts.index, counts.values,
-                            color=['#4ecdc4', '#ff6b6b'], width=0.5,
-                            edgecolor='none')
+                            color=['#4ecdc4', '#ff6b6b'], width=0.5, edgecolor='none')
             for bar, val in zip(bars, counts.values):
                 ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 25,
                         str(val), ha='center', color='#e8e6e1', fontsize=11, fontweight='bold')
@@ -453,8 +520,8 @@ elif page == "📊 Dataset Stats":
             st.markdown("<div class='section-header'>Message Length Distribution</div>", unsafe_allow_html=True)
             fig, ax = plt.subplots(figsize=(5, 3.5), facecolor='#1a1a1f')
             ax.set_facecolor('#1a1a1f')
-            ax.hist(df[df['label'] == 'ham']['msg_length'],   bins=50, alpha=0.7, color='#4ecdc4', label='Ham',  edgecolor='none')
-            ax.hist(df[df['label'] == 'spam']['msg_length'],  bins=50, alpha=0.7, color='#ff6b6b', label='Spam', edgecolor='none')
+            ax.hist(df[df['label'] == 'ham']['msg_length'],  bins=50, alpha=0.7, color='#4ecdc4', label='Ham',  edgecolor='none')
+            ax.hist(df[df['label'] == 'spam']['msg_length'], bins=50, alpha=0.7, color='#ff6b6b', label='Spam', edgecolor='none')
             ax.set_xlabel('Character Count', color='#888')
             ax.tick_params(colors='#888')
             ax.spines[:].set_visible(False)
@@ -466,13 +533,13 @@ elif page == "📊 Dataset Stats":
         st.markdown("<div class='section-header' style='margin-top:20px'>Sample Messages</div>", unsafe_allow_html=True)
         tab1, tab2 = st.tabs(["🚫 Spam Samples", "✅ Ham Samples"])
         with tab1:
-            spam_samples = df[df['label'] == 'spam'][['message', 'msg_length']].sample(5, random_state=7)
-            st.dataframe(spam_samples, use_container_width=True, hide_index=True)
+            spam_df = df[df['label'] == 'spam'][['message', 'msg_length']]
+            st.dataframe(spam_df.sample(min(5, len(spam_df)), random_state=7), use_container_width=True, hide_index=True)
         with tab2:
-            ham_samples = df[df['label'] == 'ham'][['message', 'msg_length']].sample(5, random_state=7)
-            st.dataframe(ham_samples, use_container_width=True, hide_index=True)
+            ham_df = df[df['label'] == 'ham'][['message', 'msg_length']]
+            st.dataframe(ham_df.sample(min(5, len(ham_df)), random_state=7), use_container_width=True, hide_index=True)
     else:
-        st.info("Place your `spam.csv` in the same folder as `app.py` to see dataset stats.")
+        st.info("📁 Place your `spam.csv` in the same folder as `app.py` to see dataset stats.")
 
 
 # ── Page: About ───────────────────────────────────────────────────────────────
